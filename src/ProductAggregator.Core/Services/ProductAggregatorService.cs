@@ -31,7 +31,7 @@ public class ProductAggregatorService : IProductAggregatorService
         {
             try
             {
-                var product = await GetProductInternalAsync(productId, request);
+                var product = await GetProductInternalAsync(productId, request, cancellationToken);
                 if (product != null)
                 {
                     response.Products.Add(product);
@@ -46,7 +46,7 @@ public class ProductAggregatorService : IProductAggregatorService
 
         stopwatch.Stop();
         response.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
-        
+
         return response;
     }
 
@@ -56,11 +56,14 @@ public class ProductAggregatorService : IProductAggregatorService
         {
             ProductIds = new List<string> { productId }
         };
-        
-        return await GetProductInternalAsync(productId, request);
+
+        return await GetProductInternalAsync(productId, request, cancellationToken);
     }
 
-    private async Task<Product?> GetProductInternalAsync(string productId, AggregatedProductRequest request)
+    private async Task<Product?> GetProductInternalAsync(
+        string productId,
+        AggregatedProductRequest request,
+        CancellationToken cancellationToken)
     {
         var product = new Product
         {
@@ -70,45 +73,89 @@ public class ProductAggregatorService : IProductAggregatorService
             Category = GetCategoryFromId(productId)
         };
 
-        if (request.IncludePrices)
-        {
-            foreach (var provider in _priceProviders)
-            {
-                try
-                {
-                    var priceResponse = await provider.GetPriceAsync(productId);
-                    if (priceResponse.Success && priceResponse.PriceInfo != null)
-                    {
-                        product.Prices.Add(priceResponse.PriceInfo);
-                    }
-                }
-                catch
-                {
-                    // Provider failed, continue with next
-                }
-            }
-        }
+        var pricesTask = request.IncludePrices
+            ? FetchPricesAsync(productId, cancellationToken)
+            : null;
+        var stockTask = request.IncludeStock
+            ? FetchStockAsync(productId, cancellationToken)
+            : null;
 
-        if (request.IncludeStock)
+        if (pricesTask != null && stockTask != null)
         {
-            foreach (var provider in _stockProviders)
-            {
-                try
-                {
-                    var stockResponse = await provider.GetStockAsync(productId);
-                    if (stockResponse.Success)
-                    {
-                        product.StockLevels.AddRange(stockResponse.StockInfos);
-                    }
-                }
-                catch
-                {
-                    // Provider failed, continue with next
-                }
-            }
+            await Task.WhenAll(pricesTask, stockTask);
+            product.Prices.AddRange(await pricesTask);
+            product.StockLevels.AddRange(await stockTask);
+        }
+        else if (pricesTask != null)
+        {
+            product.Prices.AddRange(await pricesTask);
+        }
+        else if (stockTask != null)
+        {
+            product.StockLevels.AddRange(await stockTask);
         }
 
         return product;
+    }
+
+    private async Task<List<PriceInfo>> FetchPricesAsync(
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        var tasks = _priceProviders.Select(provider => FetchPriceFromProviderAsync(provider, productId, cancellationToken));
+        var results = await Task.WhenAll(tasks);
+        return results.Where(price => price != null).Cast<PriceInfo>().ToList();
+    }
+
+    private static async Task<PriceInfo?> FetchPriceFromProviderAsync(
+        IPriceProvider provider,
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var priceResponse = await provider.GetPriceAsync(productId, cancellationToken);
+            if (priceResponse.Success && priceResponse.PriceInfo != null)
+            {
+                return priceResponse.PriceInfo;
+            }
+        }
+        catch
+        {
+            // Provider failed, continue with next
+        }
+
+        return null;
+    }
+
+    private async Task<List<StockInfo>> FetchStockAsync(
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        var tasks = _stockProviders.Select(provider => FetchStockFromProviderAsync(provider, productId, cancellationToken));
+        var results = await Task.WhenAll(tasks);
+        return results.Where(stockInfos => stockInfos != null).SelectMany(stockInfos => stockInfos!).ToList();
+    }
+
+    private static async Task<IReadOnlyList<StockInfo>?> FetchStockFromProviderAsync(
+        IStockProvider provider,
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var stockResponse = await provider.GetStockAsync(productId, cancellationToken);
+            if (stockResponse.Success)
+            {
+                return stockResponse.StockInfos;
+            }
+        }
+        catch
+        {
+            // Provider failed, continue with next
+        }
+
+        return null;
     }
 
     private static string GetCategoryFromId(string productId)
