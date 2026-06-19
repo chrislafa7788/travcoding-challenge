@@ -29,7 +29,7 @@ Transformar `ProductAggregatorService` de un agregador **secuencial y lento** en
 
 ### Métricas baseline (referencia)
 
-Medir antes de tocar código y guardar resultados en este documento:
+Medidas con `GET /api/products/benchmark` en entorno local (Windows, .NET 10):
 
 ```bash
 curl -k "https://localhost:7071/api/products/benchmark?productCount=1"
@@ -37,13 +37,31 @@ curl -k "https://localhost:7071/api/products/benchmark?productCount=5"
 curl -k "https://localhost:7071/api/products/benchmark?productCount=10"
 ```
 
-| productCount | processingTimeMs (baseline) | avg/product (baseline) |
-|--------------|-------------------------------|------------------------|
-| 1            | _pendiente_                   | _pendiente_            |
-| 5            | _pendiente_                   | _pendiente_            |
-| 10           | _pendiente_                   | _pendiente_            |
+#### Original (`ba0803b`)
 
-**Meta orientativa post-optimización:** `averageTimePerProduct` ≈ latencia del proveedor más lento (~0.5–0.8 s), no la suma de los 5 (~1.5–2.5 s).
+| productCount | processingTimeMs | avg/product |
+|--------------|------------------|-------------|
+| 1 | 1 711 ms | 1 711 ms |
+| 5 | 9 736 ms | 1 947 ms |
+| 10 | 20 263 ms | 2 026 ms |
+
+#### Parte 1 — paralelismo de proveedores (`7e7c6d8`)
+
+| productCount | processingTimeMs | avg/product | Mejora vs Original |
+|--------------|------------------|-------------|-------------------|
+| 1 | 536 ms | 536 ms | 69% |
+| 5 | 2 885 ms | 577 ms | 70% |
+| 10 | 5 534 ms | 553 ms | 73% |
+
+#### Parte 2 — paralelismo de productos (`9d6b0d5`, `MaxConcurrentProducts = 5`)
+
+| productCount | processingTimeMs | avg/product | Mejora vs Original |
+|--------------|------------------|-------------|-------------------|
+| 1 | 568 ms | 568 ms | 67% |
+| 5 | 678 ms | 136 ms | 93% |
+| 10 | 622 ms | 62 ms | 97% |
+
+**Meta orientativa post-optimización:** `processingTimeMs` para 10 productos ≪ 10 × latencia de un proveedor (~700 ms), gracias al paralelismo en ambos niveles. Con Parte 2 se midió **622 ms** total para 10 productos.
 
 ---
 
@@ -385,12 +403,12 @@ and cache hit scenarios.
 
 ### Cambios
 
-- [ ] Actualizar `README.md`:
+- [x] Actualizar `README.md`:
   - Puertos correctos (`https://localhost:7071`)
   - Nuevos endpoints y options
   - Tabla before/after con benchmarks reales
   - Sección "Decisiones de diseño"
-- [ ] Completar tabla baseline al inicio de este `PLAN.md`.
+- [x] Completar tabla baseline al inicio de este `PLAN.md`.
 
 ### Commit sugerido
 
@@ -436,12 +454,12 @@ Parte 10 → Docs                              [cierre]
 
 ## Checklist final antes de entregar
 
-- [ ] Benchmark `productCount=10` mejorado vs baseline (anotar números).
-- [ ] `CancellationToken` propagado end-to-end.
+- [x] Benchmark `productCount=10` mejorado vs baseline (20 263 ms → 622 ms, **97%**).
+- [x] `CancellationToken` propagado end-to-end.
 - [ ] Sin duplicación de instancias de providers.
-- [ ] README con URLs correctas.
+- [x] README con URLs correctas.
 - [ ] Tests pasando (`dotnet test`).
-- [ ] No secrets ni cambios fuera de scope.
+- [x] No secrets ni cambios fuera de scope.
 
 ---
 
