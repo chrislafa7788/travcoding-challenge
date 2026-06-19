@@ -50,7 +50,8 @@ app.MapGet("/", () => Results.Ok(new
     {
         aggregate = "POST /api/products/aggregate",
         getProduct = "GET /api/products/{productId}",
-        benchmark = "GET /api/products/benchmark?productCount=10"
+        benchmark = "GET /api/products/benchmark?productCount=10",
+        benchmarkCompare = "GET /api/products/benchmark/compare?productCount=10"
     }
 }));
 

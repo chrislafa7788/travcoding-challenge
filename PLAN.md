@@ -281,9 +281,9 @@ aggregation timing without failing the entire product.
 
 ### Cambios
 
-- [ ] Agregar `ProviderTimeoutMs` en `AggregationOptions` (default: 2000).
-- [ ] Envolver cada llamada a provider con `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter`.
-- [ ] Registrar timeout como error parcial (Parte 5).
+- [x] Agregar `ProviderTimeoutMs` en `AggregationOptions` (default: 2000).
+- [x] Envolver cada llamada a provider con `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter`.
+- [x] Registrar timeout como error parcial (Parte 5).
 
 ### Archivos
 
@@ -344,9 +344,9 @@ validation for unknown provider identifiers.
 
 ### Cambios
 
-- [ ] Nuevo endpoint `GET /api/products/benchmark/compare?productCount=10`.
-- [ ] Ejecutar agregación actual y registrar métricas (o mantener snapshot de baseline hardcodeado / config).
-- [ ] Respuesta:
+- [x] Nuevo endpoint `GET /api/products/benchmark/compare?productCount=10`.
+- [x] Ejecutar agregación actual y registrar métricas (o mantener snapshot de baseline hardcodeado / config).
+- [x] Respuesta:
 
 ```json
 {
@@ -376,14 +376,16 @@ documented sequential baseline for demo purposes.
 
 ### Cambios
 
-- [ ] Crear proyecto `ProductAggregator.Core.Tests` (xUnit).
-- [ ] Tests unitarios:
+- [x] Crear proyecto `ProductAggregator.Core.Tests` (xUnit).
+- [x] Tests unitarios:
   - Agregación con mocks sin delay (providers fake rápidos).
   - Verificar que se invocan todos los providers esperados.
   - Verificar resiliencia ante fallo de un provider.
   - Verificar propagación de `CancellationToken`.
-  - Verificar filtrado por provider IDs (Parte 7).
+  - ~~Verificar filtrado por provider IDs (Parte 7).~~ _(pendiente Parte 7)_
   - Verificar caché hit (Parte 4).
+  - Verificar timeout por proveedor (Parte 6).
+  - Verificar cálculo de baseline/compare (Parte 8).
 - [ ] Test de integración opcional con `WebApplicationFactory`.
 
 ### Commit sugerido
@@ -458,7 +460,7 @@ Parte 10 → Docs                              [cierre]
 - [x] `CancellationToken` propagado end-to-end.
 - [x] Sin duplicación de instancias de providers.
 - [x] README con URLs correctas.
-- [ ] Tests pasando (`dotnet test`).
+- [x] Tests pasando (`dotnet test` — 11 tests).
 - [x] No secrets ni cambios fuera de scope.
 
 ---

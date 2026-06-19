@@ -102,6 +102,27 @@ public class ProductsController : ControllerBase
             Errors = response.Errors
         });
     }
+
+    /// <summary>
+    /// Compares current benchmark results against the documented sequential baseline.
+    /// </summary>
+    [HttpGet("benchmark/compare")]
+    [ProducesResponseType(typeof(BenchmarkComparisonResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<BenchmarkComparisonResult>> CompareBenchmark(
+        [FromQuery] int productCount = 10,
+        CancellationToken cancellationToken = default)
+    {
+        productCount = Math.Clamp(productCount, 1, 20);
+
+        var productIds = Enumerable.Range(1, productCount)
+            .Select(i => $"PROD-{i:D4}")
+            .ToList();
+
+        var request = new AggregatedProductRequest { ProductIds = productIds };
+        var response = await _aggregatorService.AggregateProductsAsync(request, cancellationToken);
+
+        return Ok(BenchmarkComparisonCalculator.Create(productCount, response.ProcessingTimeMs));
+    }
 }
 
 public class BenchmarkResult

@@ -21,9 +21,12 @@ Cada paso tiene un **tag de git** para checkout y reproducir benchmarks.
 | **2** | Paralelismo de productos con límite configurable (`Parallel.ForEachAsync`) | `paso2` | `9d6b0d5` |
 | **3** | Logging estructurado + errores parciales (`ProviderErrors`, `Warnings`) | `paso3` | `df56c3b` |
 | **4** | Caché en memoria por proveedor (`IMemoryCache` + decoradores) | `paso4` | `330a747` |
-| **Factory + DI** | Unificación de proveedores vía `IProviderFactory` (sin duplicar instancias) | — | _(commit actual)_ |
+| **Factory + DI** | Unificación de proveedores vía `IProviderFactory` (sin duplicar instancias) | — | _(ver rama actual)_ |
+| **Timeout** | Deadline configurable por proveedor (`ProviderTimeoutMs`) | — | _(ver rama actual)_ |
+| **Compare** | Endpoint `/benchmark/compare` vs baseline documentado | — | _(ver rama actual)_ |
+| **Tests** | Suite xUnit (`ProductAggregator.Core.Tests`) | — | _(ver rama actual)_ |
 
-> **Nota sobre numeración:** los tags `paso1`–`paso4` siguen el orden de commits de rendimiento/features. La unificación Factory + DI corresponde a la **Parte 3 del `PLAN.md`** (refactor arquitectónico, sin impacto medible en benchmarks).
+> **Nota sobre numeración:** los tags `paso1`–`paso4` siguen el orden de commits de rendimiento/features. Otras partes del `PLAN.md` (Factory, timeout, compare, tests) están en la rama actual.
 
 ## Estructura del proyecto
 
@@ -37,12 +40,15 @@ src/
     ├── Interfaces/
     ├── Services/
     │   ├── ProductAggregatorService.cs
-    │   ├── Caching/                    # Parte 4: decoradores de caché
-    │   │   ├── CachingPriceProvider.cs
-    │   │   ├── CachingStockProvider.cs
-    │   │   └── ProviderCacheKeys.cs
+    │   ├── Caching/
     │   └── MockProviders/
     └── Factories/ProviderFactory.cs
+
+tests/
+└── ProductAggregator.Core.Tests/
+    ├── ProductAggregatorServiceTests.cs
+    ├── CachingPriceProviderTests.cs
+    └── BenchmarkComparisonCalculatorTests.cs
 ```
 
 ## Cómo ejecutar
@@ -51,6 +57,12 @@ src/
 dotnet restore
 cd src/ProductAggregator.Api
 dotnet run
+```
+
+### Tests
+
+```bash
+dotnet test
 ```
 
 ### URLs locales
@@ -70,7 +82,8 @@ En Windows, usar `curl -k` para omitir la validación del certificado de desarro
 {
   "Aggregation": {
     "MaxConcurrentProducts": 5,
-    "CacheTtlSeconds": 30
+    "CacheTtlSeconds": 30,
+    "ProviderTimeoutMs": 2000
   }
 }
 ```
@@ -79,6 +92,7 @@ En Windows, usar `curl -k` para omitir la validación del certificado de desarro
 |--------|---------|-------------|
 | `MaxConcurrentProducts` | `5` | Máximo de productos procesados en paralelo |
 | `CacheTtlSeconds` | `30` | TTL de caché por proveedor (segundos). `0` = desactivada |
+| `ProviderTimeoutMs` | `2000` | Timeout por proveedor (ms). `0` = desactivado |
 
 Con `MaxConcurrentProducts = 1` los productos se procesan secuencialmente (comportamiento equivalente a Parte 1 sola).
 
@@ -106,7 +120,38 @@ Respuesta:
 
 > **Nota:** `averageTimePerProduct` es `processingTimeMs / productCount`. Con paralelismo de productos (Parte 2), el total baja mucho más que el promedio por producto; mirar siempre `processingTimeMs` para comparar rendimiento real.
 
-### 2. Agregar múltiples productos
+### 2. Benchmark compare (vs baseline original)
+
+```bash
+curl -k "https://localhost:7071/api/products/benchmark/compare?productCount=10"
+```
+
+Compara el rendimiento **actual** contra el baseline secuencial documentado (mediciones del código original):
+
+```json
+{
+  "productCount": 10,
+  "current": {
+    "processingTimeMs": 622,
+    "averageTimePerProduct": 62.2
+  },
+  "estimatedBaseline": {
+    "processingTimeMs": 20263,
+    "averageTimePerProduct": 2026.3
+  },
+  "improvementPercent": 96.9
+}
+```
+
+| Campo | Significado |
+|-------|-------------|
+| `current` | Resultado de la agregación optimizada actual |
+| `estimatedBaseline` | Medición documentada del código original (`ba0803b`) |
+| `improvementPercent` | `(baseline - current) / baseline × 100` |
+
+Para `productCount` distinto de 1, 5 o 10, el baseline se extrapola linealmente (~2026 ms/producto).
+
+### 3. Agregar múltiples productos
 
 ```bash
 curl -k -X POST "https://localhost:7071/api/products/aggregate" \
@@ -135,16 +180,16 @@ Respuesta extendida (`paso3` — observabilidad):
 | Campo | Significado |
 |-------|-------------|
 | `errors` | Producto **no procesado** (fallo total) |
-| `providerErrors` | Proveedor falló, producto devuelto **parcialmente** |
+| `providerErrors` | Proveedor falló o hizo timeout — producto devuelto **parcialmente** |
 | `warnings` | Mismo fallo parcial en texto legible |
 
-### 3. Obtener un producto
+### 4. Obtener un producto
 
 ```bash
 curl -k "https://localhost:7071/api/products/PROD-001"
 ```
 
-### 4. OpenAPI (Development)
+### 5. OpenAPI (Development)
 
 ```bash
 curl -k "https://localhost:7071/openapi/v1.json"
@@ -172,62 +217,19 @@ Benchmarks medidos con `GET /api/products/benchmark` en entorno local (Windows, 
 
 ### Caché — `POST /aggregate` con IDs repetidos (`paso4`)
 
-Medido en tag `paso4` (`330a747`) con body:
-
-```json
-{
-  "productIds": ["PROD-001", "PROD-001", "PROD-001"],
-  "includePrices": true,
-  "includeStock": true
-}
-```
-
 | Escenario | `processingTimeMs` | Notas |
 |-----------|----------------------|-------|
 | 1ª llamada (caché fría) | **699 ms** | Consulta real a los 5 proveedores |
 | 2ª llamada (caché caliente, TTL 30s) | **0 ms** | Respuestas servidas desde `IMemoryCache` |
 | `GET /benchmark?productCount=10` en `paso4` | **700 ms** | IDs distintos → poca reutilización de caché |
 
-> El benchmark con IDs únicos (`PROD-0001`…`PROD-0010`) no muestra el beneficio de caché. Para verlo, repetir el mismo `productId` o ejecutar la misma request dos veces dentro del TTL.
+### Compare endpoint — ejemplo (`productCount=10`)
 
-**Comando para reproducir el benchmark de caché:**
-
-```bash
-git switch --detach paso4
-cd src/ProductAggregator.Api && dotnet run
-```
-
-```bash
-curl -k -X POST "https://localhost:7071/api/products/aggregate" \
-  -H "Content-Type: application/json" \
-  -d '{"productIds":["PROD-001","PROD-001","PROD-001"],"includePrices":true,"includeStock":true}'
-
-# Repetir el mismo curl inmediatamente → processingTimeMs ≈ 0
-```
-
-### Qué explica cada mejora
-
-**Original → `paso1` (~73% menos en 10 productos):**
-- Antes: 5 llamadas secuenciales por producto (suma de latencias).
-- Después: 5 llamadas en paralelo por producto (latencia ≈ la del proveedor más lento).
-
-**`paso1` → `paso2` (~89% menos adicional en 10 productos):**
-- Antes: productos procesados uno tras otro.
-- Después: hasta 5 productos en paralelo (`MaxConcurrentProducts = 5` en el commit medido).
-
-**`paso2` → `paso4` (caché, requests repetidas):**
-- Decoradores `CachingPriceProvider` / `CachingStockProvider` cachean por clave `{ProviderId}:{productId}:price|stock`.
-- Solo respuestas exitosas se guardan; fallos no se cachean.
-- 2ª request idéntica dentro del TTL: de ~700 ms a ~0 ms.
-
-**Comportamiento esperado por fase:**
-
-```
-Original:  O(productos) × O(proveedores) secuencial  →  ~2 s/producto
-paso1:     O(productos) × O(1) por producto           →  ~0.5–0.7 s/producto
-paso2:     O(productos / concurrencia) × O(1)         →  ~0.6–1.2 s total para 10 productos
-paso4:     paso2 + caché en hits                      →  ~0 ms en re-llamadas dentro del TTL
-```
+| Métrica | Valor |
+|---------|-------|
+| Baseline original | 20 263 ms |
+| Actual (típico) | ~622 ms |
+| Mejora | **~97%** |
 
 ## Decisiones de diseño
 
@@ -242,7 +244,7 @@ Con 50 productos y 5 proveedores, el paralelismo total podría disparar 250 llam
 ### Errores separados (`Errors` vs `ProviderErrors`)
 
 - `Errors`: fallo total — el producto no se devuelve.
-- `ProviderErrors`: fallo parcial — el producto se devuelve con datos incompletos.
+- `ProviderErrors`: fallo parcial o timeout — el producto se devuelve con datos incompletos.
 - Esto evita que un fallo de `PRICE_A` (~5%) se interprete como fallo de toda la agregación.
 
 ### Caché por proveedor (Decorator + `IMemoryCache`)
@@ -250,76 +252,38 @@ Con 50 productos y 5 proveedores, el paralelismo total podría disparar 250 llam
 - Cada mock se envuelve en un decorador que implementa `IPriceProvider` / `IStockProvider`.
 - `ProductAggregatorService` no sabe que hay caché — solo llama a la interfaz vía factory.
 - Se cachea **por proveedor**, no el producto agregado, para respetar `includePrices` / `includeStock`.
-- Clave: `PRICE_A:PROD-001:price`, `STOCK_EAST:PROD-001:stock`, etc.
 
 ### Factory + DI (`IProviderFactory`)
 
-Antes existían **dos caminos** a los proveedores:
+Un solo camino de instancias: `Mock → CachingDecorator → ProviderFactory → Service`.
 
-```
-DI (IEnumerable<IPriceProvider>)  →  ProductAggregatorService
-ProviderFactory (new Mock...)     →  instancias distintas, sin caché
-```
+### Timeout por proveedor
 
-Ahora hay **un solo camino**:
+Cada llamada usa `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter(ProviderTimeoutMs)`. Los timeouts se reportan en `ProviderErrors` sin tumbar el producto.
 
-```
-Program.cs → Mock → CachingDecorator → DI
-                              ↓
-                      ProviderFactory (indexa por ProviderId)
-                              ↓
-                   ProductAggregatorService
-```
+### Baseline documentado (`PerformanceBaseline`)
 
-- `ProviderFactory` recibe los proveedores ya registrados en DI (incluyen decoradores de caché).
-- `ProductAggregatorService` solo usa `IProviderFactory.GetPriceProviders()` / `GetStockProviders()`.
-- `GetPriceProvider(id)` / `GetStockProvider(id)` quedan disponibles para filtrado futuro (Parte 7 del plan).
-- Refactor **sin cambio de rendimiento** — misma lógica de agregación, menos deuda técnica.
-
-### `CancellationToken` propagado
-
-El token viaja desde el controller hasta cada `GetPriceAsync` / `GetStockAsync`, permitiendo cancelar requests largas.
+El endpoint `/benchmark/compare` usa mediciones reales del código original (no re-ejecuta el código legacy). Valores exactos para 1, 5 y 10 productos; extrapolación lineal para otros counts.
 
 ## Cómo reproducir los benchmarks
 
 ```bash
-# Original (código sin optimizar)
-git checkout ba0803b
-
-# Parte 1 — paralelismo de proveedores
-git switch --detach paso1    # 7e7c6d8
-
-# Parte 2 — paralelismo de productos
-git switch --detach paso2    # 9d6b0d5
-
-# Parte 3 — observabilidad
-git switch --detach paso3    # df56c3b
-
-# Parte 4 — caché
-git switch --detach paso4    # 330a747
-
-# Rama actual (incluye Factory + DI unificado, post-paso4)
+git checkout ba0803b          # Original
+git switch --detach paso1       # 7e7c6d8
+git switch --detach paso2       # 9d6b0d5
+git switch --detach paso3       # df56c3b
+git switch --detach paso4       # 330a747
 git checkout feature/performance-optimization
 ```
 
-En cada checkout:
-
 ```bash
-cd src/ProductAggregator.Api
-dotnet run
+cd src/ProductAggregator.Api && dotnet run
 ```
 
 ```bash
-# Benchmark general (IDs únicos)
-curl -k "https://localhost:7071/api/products/benchmark?productCount=1"
-curl -k "https://localhost:7071/api/products/benchmark?productCount=5"
 curl -k "https://localhost:7071/api/products/benchmark?productCount=10"
-
-# Benchmark de caché (solo paso4+)
-curl -k -X POST "https://localhost:7071/api/products/aggregate" \
-  -H "Content-Type: application/json" \
-  -d '{"productIds":["PROD-001","PROD-001"],"includePrices":true,"includeStock":true}'
-# Ejecutar dos veces y comparar processingTimeMs
+curl -k "https://localhost:7071/api/products/benchmark/compare?productCount=10"
+dotnet test
 ```
 
 ## Tareas originales del challenge
@@ -328,4 +292,4 @@ curl -k -X POST "https://localhost:7071/api/products/aggregate" \
 2. ~~Identificar problemas de rendimiento~~
 3. ~~Proponer e implementar mejoras~~
 
-Ver `PLAN.md` para el roadmap de optimizaciones pendientes (timeout por proveedor, selección de providers, tests, etc.).
+Ver `PLAN.md` para optimizaciones pendientes (selección de providers, etc.).
