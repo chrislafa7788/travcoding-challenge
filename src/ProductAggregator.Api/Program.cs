@@ -21,14 +21,13 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 
-// Provider Factory
-builder.Services.AddSingleton<IProviderFactory, ProviderFactory>();
-
 RegisterCachedPriceProvider<MockPriceProviderA>(builder.Services);
 RegisterCachedPriceProvider<MockPriceProviderB>(builder.Services);
 RegisterCachedPriceProvider<MockPriceProviderC>(builder.Services);
 RegisterCachedStockProvider<MockStockProviderEast>(builder.Services);
 RegisterCachedStockProvider<MockStockProviderWest>(builder.Services);
+
+builder.Services.AddSingleton<IProviderFactory, ProviderFactory>();
 
 // Product Aggregator Service
 builder.Services.AddScoped<IProductAggregatorService, ProductAggregatorService>();

@@ -21,6 +21,9 @@ Cada paso tiene un **tag de git** para checkout y reproducir benchmarks.
 | **2** | Paralelismo de productos con límite configurable (`Parallel.ForEachAsync`) | `paso2` | `9d6b0d5` |
 | **3** | Logging estructurado + errores parciales (`ProviderErrors`, `Warnings`) | `paso3` | `df56c3b` |
 | **4** | Caché en memoria por proveedor (`IMemoryCache` + decoradores) | `paso4` | `330a747` |
+| **Factory + DI** | Unificación de proveedores vía `IProviderFactory` (sin duplicar instancias) | — | _(commit actual)_ |
+
+> **Nota sobre numeración:** los tags `paso1`–`paso4` siguen el orden de commits de rendimiento/features. La unificación Factory + DI corresponde a la **Parte 3 del `PLAN.md`** (refactor arquitectónico, sin impacto medible en benchmarks).
 
 ## Estructura del proyecto
 
@@ -115,7 +118,7 @@ curl -k -X POST "https://localhost:7071/api/products/aggregate" \
   }'
 ```
 
-Respuesta extendida (Parte 3):
+Respuesta extendida (`paso3` — observabilidad):
 
 ```json
 {
@@ -245,9 +248,33 @@ Con 50 productos y 5 proveedores, el paralelismo total podría disparar 250 llam
 ### Caché por proveedor (Decorator + `IMemoryCache`)
 
 - Cada mock se envuelve en un decorador que implementa `IPriceProvider` / `IStockProvider`.
-- `ProductAggregatorService` no sabe que hay caché — solo llama a la interfaz.
+- `ProductAggregatorService` no sabe que hay caché — solo llama a la interfaz vía factory.
 - Se cachea **por proveedor**, no el producto agregado, para respetar `includePrices` / `includeStock`.
 - Clave: `PRICE_A:PROD-001:price`, `STOCK_EAST:PROD-001:stock`, etc.
+
+### Factory + DI (`IProviderFactory`)
+
+Antes existían **dos caminos** a los proveedores:
+
+```
+DI (IEnumerable<IPriceProvider>)  →  ProductAggregatorService
+ProviderFactory (new Mock...)     →  instancias distintas, sin caché
+```
+
+Ahora hay **un solo camino**:
+
+```
+Program.cs → Mock → CachingDecorator → DI
+                              ↓
+                      ProviderFactory (indexa por ProviderId)
+                              ↓
+                   ProductAggregatorService
+```
+
+- `ProviderFactory` recibe los proveedores ya registrados en DI (incluyen decoradores de caché).
+- `ProductAggregatorService` solo usa `IProviderFactory.GetPriceProviders()` / `GetStockProviders()`.
+- `GetPriceProvider(id)` / `GetStockProvider(id)` quedan disponibles para filtrado futuro (Parte 7 del plan).
+- Refactor **sin cambio de rendimiento** — misma lógica de agregación, menos deuda técnica.
 
 ### `CancellationToken` propagado
 
@@ -271,7 +298,7 @@ git switch --detach paso3    # df56c3b
 # Parte 4 — caché
 git switch --detach paso4    # 330a747
 
-# Rama actual (todas las optimizaciones)
+# Rama actual (incluye Factory + DI unificado, post-paso4)
 git checkout feature/performance-optimization
 ```
 
@@ -301,4 +328,4 @@ curl -k -X POST "https://localhost:7071/api/products/aggregate" \
 2. ~~Identificar problemas de rendimiento~~
 3. ~~Proponer e implementar mejoras~~
 
-Ver `PLAN.md` para el roadmap de optimizaciones pendientes (timeout, tests, etc.).
+Ver `PLAN.md` para el roadmap de optimizaciones pendientes (timeout por proveedor, selección de providers, tests, etc.).

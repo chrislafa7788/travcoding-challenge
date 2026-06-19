@@ -22,8 +22,8 @@ Transformar `ProductAggregatorService` de un agregador **secuencial y lento** en
 | 3 | Proveedores de stock en serie | Idem | ~2× latencia adicional |
 | 4 | Precios y stock también en serie entre sí | Idem | Suma en lugar de max(paralelo) |
 | 5 | `CancellationToken` no propagado | Controller → Service → Providers | Requests canceladas siguen ejecutándose |
-| 6 | `ProviderFactory` duplicada y sin uso | `Program.cs` + `ProviderFactory.cs` | Dos instancias de mocks, confusión arquitectónica |
-| 7 | Sin caché | N/A | Re-llamadas innecesarias al mismo `productId` |
+| 6 | ~~`ProviderFactory` duplicada y sin uso~~ | ~~`Program.cs` + `ProviderFactory.cs`~~ | ~~Resuelto en Parte 3 (Factory + DI)~~ |
+| 7 | ~~Sin caché~~ | ~~N/A~~ | ~~Resuelto en Parte 4 (`paso4`)~~ |
 | 8 | Errores silenciados | `catch { }` vacío en providers | Difícil diagnosticar fallos parciales |
 | 9 | Sin tests automatizados | N/A | Regresiones no detectables |
 
@@ -163,10 +163,10 @@ concurrency limit driven by AggregationOptions.
 
 ### Cambios
 
-- [ ] Refactorizar `ProviderFactory` para recibir proveedores vía DI en lugar de `new MockPriceProviderA()`.
-- [ ] Opción A (recomendada): `ProductAggregatorService` usa `IProviderFactory` como única fuente.
-- [ ] Eliminar registros individuales duplicados en `Program.cs` si la factory los centraliza.
-- [ ] Mantener `GetPriceProvider(id)` / `GetStockProvider(id)` para uso futuro.
+- [x] Refactorizar `ProviderFactory` para recibir proveedores vía DI en lugar de `new MockPriceProviderA()`.
+- [x] Opción A (recomendada): `ProductAggregatorService` usa `IProviderFactory` como única fuente.
+- [x] Eliminar registros individuales duplicados en `Program.cs` si la factory los centraliza.
+- [x] Mantener `GetPriceProvider(id)` / `GetStockProvider(id)` para uso futuro.
 
 ### Archivos
 
@@ -198,10 +198,10 @@ providers exclusively through the factory in ProductAggregatorService.
 
 ### Cambios
 
-- [ ] Crear `CachingPriceProvider` / `CachingStockProvider` decoradores, **o** caché dentro del servicio.
-- [ ] Usar `IMemoryCache` (ya referenciado en `.csproj`).
-- [ ] Clave de caché: `{ProviderId}:{productId}:{prices|stock}`.
-- [ ] TTL configurable en `appsettings.json`:
+- [x] Crear `CachingPriceProvider` / `CachingStockProvider` decoradores, **o** caché dentro del servicio.
+- [x] Usar `IMemoryCache` (ya referenciado en `.csproj`).
+- [x] Clave de caché: `{ProviderId}:{productId}:{prices|stock}`.
+- [x] TTL configurable en `appsettings.json`:
 
 ```json
 "Aggregation": {
@@ -209,7 +209,7 @@ providers exclusively through the factory in ProductAggregatorService.
 }
 ```
 
-- [ ] Respetar `includePrices` / `includeStock` (no cachear producto entero mezclado).
+- [x] Respetar `includePrices` / `includeStock` (no cachear producto entero mezclado).
 
 ### Archivos
 
@@ -446,7 +446,7 @@ Parte 10 → Docs                              [cierre]
 |----------|----------|---------------|
 | Paralelismo de productos | Sin límite vs semáforo | Semáforo (default 5) |
 | Caché | Decorador vs servicio | Decorador (SRP, testeable) |
-| Factory | Service usa factory vs IEnumerable | Factory como única fuente |
+| Factory | Service usa factory vs IEnumerable | Factory como única fuente ✅ |
 | Errores parciales | Solo logs vs campo en response | Ambos |
 | Compare endpoint | Legacy code vs constante | Constante documentada (menos código muerto) |
 
@@ -456,7 +456,7 @@ Parte 10 → Docs                              [cierre]
 
 - [x] Benchmark `productCount=10` mejorado vs baseline (20 263 ms → 622 ms, **97%**).
 - [x] `CancellationToken` propagado end-to-end.
-- [ ] Sin duplicación de instancias de providers.
+- [x] Sin duplicación de instancias de providers.
 - [x] README con URLs correctas.
 - [ ] Tests pasando (`dotnet test`).
 - [x] No secrets ni cambios fuera de scope.

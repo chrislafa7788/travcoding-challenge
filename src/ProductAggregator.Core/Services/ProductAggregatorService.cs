@@ -8,19 +8,16 @@ namespace ProductAggregator.Core.Services;
 
 public class ProductAggregatorService : IProductAggregatorService
 {
-    private readonly IEnumerable<IPriceProvider> _priceProviders;
-    private readonly IEnumerable<IStockProvider> _stockProviders;
+    private readonly IProviderFactory _providerFactory;
     private readonly AggregationOptions _options;
     private readonly ILogger<ProductAggregatorService> _logger;
 
     public ProductAggregatorService(
-        IEnumerable<IPriceProvider> priceProviders,
-        IEnumerable<IStockProvider> stockProviders,
+        IProviderFactory providerFactory,
         IOptions<AggregationOptions> options,
         ILogger<ProductAggregatorService> logger)
     {
-        _priceProviders = priceProviders;
-        _stockProviders = stockProviders;
+        _providerFactory = providerFactory;
         _options = options.Value;
         _logger = logger;
     }
@@ -109,8 +106,10 @@ public class ProductAggregatorService : IProductAggregatorService
             };
 
             var providerErrors = new List<ProviderError>();
-            var expectedPriceProviders = request.IncludePrices ? _priceProviders.Count() : 0;
-            var expectedStockProviders = request.IncludeStock ? _stockProviders.Count() : 0;
+            var priceProviders = _providerFactory.GetPriceProviders();
+            var stockProviders = _providerFactory.GetStockProviders();
+            var expectedPriceProviders = request.IncludePrices ? priceProviders.Count() : 0;
+            var expectedStockProviders = request.IncludeStock ? stockProviders.Count() : 0;
             var successfulPriceProviders = 0;
             var successfulStockProviders = 0;
 
@@ -187,7 +186,7 @@ public class ProductAggregatorService : IProductAggregatorService
         string productId,
         CancellationToken cancellationToken)
     {
-        var tasks = _priceProviders.Select(provider =>
+        var tasks = _providerFactory.GetPriceProviders().Select(provider =>
             FetchPriceFromProviderAsync(provider, productId, cancellationToken));
         var results = await Task.WhenAll(tasks);
 
@@ -258,7 +257,7 @@ public class ProductAggregatorService : IProductAggregatorService
         string productId,
         CancellationToken cancellationToken)
     {
-        var tasks = _stockProviders.Select(provider =>
+        var tasks = _providerFactory.GetStockProviders().Select(provider =>
             FetchStockFromProviderAsync(provider, productId, cancellationToken));
         var results = await Task.WhenAll(tasks);
 
