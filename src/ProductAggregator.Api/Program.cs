@@ -1,9 +1,13 @@
 using ProductAggregator.Core.Factories;
 using ProductAggregator.Core.Interfaces;
+using ProductAggregator.Core.Models;
 using ProductAggregator.Core.Services;
 using ProductAggregator.Core.Services.MockProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<AggregationOptions>(
+    builder.Configuration.GetSection(AggregationOptions.SectionName));
 
 // Add controllers
 builder.Services.AddControllers();

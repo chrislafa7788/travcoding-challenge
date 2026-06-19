@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using ProductAggregator.Core.Interfaces;
 using ProductAggregator.Core.Models;
 
@@ -8,13 +9,16 @@ public class ProductAggregatorService : IProductAggregatorService
 {
     private readonly IEnumerable<IPriceProvider> _priceProviders;
     private readonly IEnumerable<IStockProvider> _stockProviders;
+    private readonly AggregationOptions _options;
 
     public ProductAggregatorService(
         IEnumerable<IPriceProvider> priceProviders,
-        IEnumerable<IStockProvider> stockProviders)
+        IEnumerable<IStockProvider> stockProviders,
+        IOptions<AggregationOptions> options)
     {
         _priceProviders = priceProviders;
         _stockProviders = stockProviders;
+        _options = options.Value;
     }
 
     public async Task<AggregatedProductResponse> AggregateProductsAsync(
@@ -27,20 +31,42 @@ public class ProductAggregatorService : IProductAggregatorService
             TotalRequested = request.ProductIds.Count
         };
 
-        foreach (var productId in request.ProductIds)
-        {
-            try
+        var maxConcurrency = Math.Max(1, _options.MaxConcurrentProducts);
+        var productResults = new (Product? Product, string? Error)[request.ProductIds.Count];
+
+        await Parallel.ForEachAsync(
+            //primer parametro lista a recorrer ej: (P1,0), (P2,1) , (P3,2)
+            request.ProductIds.Select((productId, index) => (productId, index)),
+            //segundo PerallelOptions. Maximo de concurrencias simultaneas y CancelationToken
+            new ParallelOptions
             {
-                var product = await GetProductInternalAsync(productId, request, cancellationToken);
-                if (product != null)
+                MaxDegreeOfParallelism = maxConcurrency,
+                CancellationToken = cancellationToken
+            },
+            //tercer parametro ejecucion por item y guardado de resutlado respetando el orden
+            async (item, ct) =>
+            {
+                try
                 {
-                    response.Products.Add(product);
-                    response.TotalSuccessful++;
+                    var product = await GetProductInternalAsync(item.productId, request, ct);
+                    productResults[item.index] = (product, null);
                 }
-            }
-            catch (Exception ex)
+                catch (Exception ex)
+                {
+                    productResults[item.index] = (null, $"Failed to process product {item.productId}: {ex.Message}");
+                }
+            });
+
+        foreach (var (product, error) in productResults)
+        {
+            if (error != null)
             {
-                response.Errors.Add($"Failed to process product {productId}: {ex.Message}");
+                response.Errors.Add(error);
+            }
+            else if (product != null)
+            {
+                response.Products.Add(product);
+                response.TotalSuccessful++;
             }
         }
 
