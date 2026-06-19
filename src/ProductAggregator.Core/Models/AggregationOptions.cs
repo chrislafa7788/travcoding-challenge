@@ -7,4 +7,6 @@ public class AggregationOptions
     public int MaxConcurrentProducts { get; set; } = 5;
 
     public int CacheTtlSeconds { get; set; } = 30;
+
+    public int ProviderTimeoutMs { get; set; } = 2000;
 }

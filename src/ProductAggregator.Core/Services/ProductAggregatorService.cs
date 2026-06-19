@@ -164,6 +164,10 @@ public class ProductAggregatorService : IProductAggregatorService
 
             return new ProductAggregationResult(product, null, providerErrors, warnings);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             productStopwatch.Stop();
@@ -214,9 +218,12 @@ public class ProductAggregatorService : IProductAggregatorService
         string productId,
         CancellationToken cancellationToken)
     {
+        using var timeoutSource = CreateProviderTimeoutSource(cancellationToken);
+        var providerCancellationToken = timeoutSource?.Token ?? cancellationToken;
+
         try
         {
-            var priceResponse = await provider.GetPriceAsync(productId, cancellationToken);
+            var priceResponse = await provider.GetPriceAsync(productId, providerCancellationToken);
             if (priceResponse.Success && priceResponse.PriceInfo != null)
             {
                 return (priceResponse.PriceInfo, null);
@@ -235,6 +242,14 @@ public class ProductAggregatorService : IProductAggregatorService
                 ProviderId = provider.ProviderId,
                 Message = message
             });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            return (null, CreateProviderTimeoutError(provider.ProviderId, productId, ex));
         }
         catch (Exception ex)
         {
@@ -285,9 +300,12 @@ public class ProductAggregatorService : IProductAggregatorService
         string productId,
         CancellationToken cancellationToken)
     {
+        using var timeoutSource = CreateProviderTimeoutSource(cancellationToken);
+        var providerCancellationToken = timeoutSource?.Token ?? cancellationToken;
+
         try
         {
-            var stockResponse = await provider.GetStockAsync(productId, cancellationToken);
+            var stockResponse = await provider.GetStockAsync(productId, providerCancellationToken);
             if (stockResponse.Success)
             {
                 return (stockResponse.StockInfos, null);
@@ -307,6 +325,14 @@ public class ProductAggregatorService : IProductAggregatorService
                 Message = message
             });
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            return (null, CreateProviderTimeoutError(provider.ProviderId, productId, ex));
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
@@ -322,6 +348,40 @@ public class ProductAggregatorService : IProductAggregatorService
                 Message = ex.Message
             });
         }
+    }
+
+    private CancellationTokenSource? CreateProviderTimeoutSource(CancellationToken cancellationToken)
+    {
+        if (_options.ProviderTimeoutMs <= 0)
+        {
+            return null;
+        }
+
+        var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(_options.ProviderTimeoutMs);
+        return timeoutSource;
+    }
+
+    private ProviderError CreateProviderTimeoutError(
+        string providerId,
+        string productId,
+        OperationCanceledException exception)
+    {
+        var message = $"Provider timed out after {_options.ProviderTimeoutMs}ms.";
+
+        _logger.LogWarning(
+            exception,
+            "Provider {ProviderId} timed out for product {ProductId} after {TimeoutMs}ms",
+            providerId,
+            productId,
+            _options.ProviderTimeoutMs);
+
+        return new ProviderError
+        {
+            ProductId = productId,
+            ProviderId = providerId,
+            Message = message
+        };
     }
 
     private static List<string> BuildWarnings(string productId, IReadOnlyList<ProviderError> providerErrors)
