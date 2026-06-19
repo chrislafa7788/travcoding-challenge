@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProductAggregator.Core.Interfaces;
 using ProductAggregator.Core.Models;
@@ -10,15 +11,18 @@ public class ProductAggregatorService : IProductAggregatorService
     private readonly IEnumerable<IPriceProvider> _priceProviders;
     private readonly IEnumerable<IStockProvider> _stockProviders;
     private readonly AggregationOptions _options;
+    private readonly ILogger<ProductAggregatorService> _logger;
 
     public ProductAggregatorService(
         IEnumerable<IPriceProvider> priceProviders,
         IEnumerable<IStockProvider> stockProviders,
-        IOptions<AggregationOptions> options)
+        IOptions<AggregationOptions> options,
+        ILogger<ProductAggregatorService> logger)
     {
         _priceProviders = priceProviders;
         _stockProviders = stockProviders;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<AggregatedProductResponse> AggregateProductsAsync(
@@ -32,46 +36,46 @@ public class ProductAggregatorService : IProductAggregatorService
         };
 
         var maxConcurrency = Math.Max(1, _options.MaxConcurrentProducts);
-        var productResults = new (Product? Product, string? Error)[request.ProductIds.Count];
+        var productResults = new ProductAggregationResult[request.ProductIds.Count];
 
         await Parallel.ForEachAsync(
-            //primer parametro lista a recorrer ej: (P1,0), (P2,1) , (P3,2)
             request.ProductIds.Select((productId, index) => (productId, index)),
-            //segundo PerallelOptions. Maximo de concurrencias simultaneas y CancelationToken
             new ParallelOptions
             {
                 MaxDegreeOfParallelism = maxConcurrency,
                 CancellationToken = cancellationToken
             },
-            //tercer parametro ejecucion por item y guardado de resutlado respetando el orden
             async (item, ct) =>
             {
-                try
-                {
-                    var product = await GetProductInternalAsync(item.productId, request, ct);
-                    productResults[item.index] = (product, null);
-                }
-                catch (Exception ex)
-                {
-                    productResults[item.index] = (null, $"Failed to process product {item.productId}: {ex.Message}");
-                }
+                productResults[item.index] = await AggregateProductAsync(item.productId, request, ct);
             });
 
-        foreach (var (product, error) in productResults)
+        foreach (var result in productResults)
         {
-            if (error != null)
+            if (result.Error != null)
             {
-                response.Errors.Add(error);
+                response.Errors.Add(result.Error);
             }
-            else if (product != null)
+            else if (result.Product != null)
             {
-                response.Products.Add(product);
+                response.Products.Add(result.Product);
                 response.TotalSuccessful++;
             }
+
+            response.ProviderErrors.AddRange(result.ProviderErrors);
+            response.Warnings.AddRange(result.Warnings);
         }
 
         stopwatch.Stop();
         response.ProcessingTimeMs = stopwatch.ElapsedMilliseconds;
+
+        if (response.ProviderErrors.Count > 0)
+        {
+            _logger.LogWarning(
+                "Aggregation completed with {ProviderErrorCount} provider error(s) across {ProductCount} product(s)",
+                response.ProviderErrors.Count,
+                response.TotalSuccessful);
+        }
 
         return response;
     }
@@ -83,57 +87,130 @@ public class ProductAggregatorService : IProductAggregatorService
             ProductIds = new List<string> { productId }
         };
 
-        return await GetProductInternalAsync(productId, request, cancellationToken);
+        var result = await AggregateProductAsync(productId, request, cancellationToken);
+        return result.Product;
     }
 
-    private async Task<Product?> GetProductInternalAsync(
+    private async Task<ProductAggregationResult> AggregateProductAsync(
         string productId,
         AggregatedProductRequest request,
         CancellationToken cancellationToken)
     {
-        var product = new Product
-        {
-            Id = productId,
-            Name = $"Product {productId}",
-            Description = $"Description for product {productId}",
-            Category = GetCategoryFromId(productId)
-        };
+        var productStopwatch = Stopwatch.StartNew();
 
-        var pricesTask = request.IncludePrices
-            ? FetchPricesAsync(productId, cancellationToken)
-            : null;
-        var stockTask = request.IncludeStock
-            ? FetchStockAsync(productId, cancellationToken)
-            : null;
+        try
+        {
+            var product = new Product
+            {
+                Id = productId,
+                Name = $"Product {productId}",
+                Description = $"Description for product {productId}",
+                Category = GetCategoryFromId(productId)
+            };
 
-        if (pricesTask != null && stockTask != null)
-        {
-            await Task.WhenAll(pricesTask, stockTask);
-            product.Prices.AddRange(await pricesTask);
-            product.StockLevels.AddRange(await stockTask);
-        }
-        else if (pricesTask != null)
-        {
-            product.Prices.AddRange(await pricesTask);
-        }
-        else if (stockTask != null)
-        {
-            product.StockLevels.AddRange(await stockTask);
-        }
+            var providerErrors = new List<ProviderError>();
+            var expectedPriceProviders = request.IncludePrices ? _priceProviders.Count() : 0;
+            var expectedStockProviders = request.IncludeStock ? _stockProviders.Count() : 0;
+            var successfulPriceProviders = 0;
+            var successfulStockProviders = 0;
 
-        return product;
+            var pricesTask = request.IncludePrices
+                ? FetchPricesAsync(productId, cancellationToken)
+                : null;
+            var stockTask = request.IncludeStock
+                ? FetchStockAsync(productId, cancellationToken)
+                : null;
+
+            if (pricesTask != null && stockTask != null)
+            {
+                await Task.WhenAll(pricesTask, stockTask);
+                var pricesResult = await pricesTask;
+                var stockResult = await stockTask;
+
+                product.Prices.AddRange(pricesResult.Prices);
+                product.StockLevels.AddRange(stockResult.StockInfos);
+                providerErrors.AddRange(pricesResult.Errors);
+                providerErrors.AddRange(stockResult.Errors);
+                successfulPriceProviders = pricesResult.Prices.Count;
+                successfulStockProviders = expectedStockProviders - stockResult.Errors.Count;
+            }
+            else if (pricesTask != null)
+            {
+                var pricesResult = await pricesTask;
+                product.Prices.AddRange(pricesResult.Prices);
+                providerErrors.AddRange(pricesResult.Errors);
+                successfulPriceProviders = pricesResult.Prices.Count;
+            }
+            else if (stockTask != null)
+            {
+                var stockResult = await stockTask;
+                product.StockLevels.AddRange(stockResult.StockInfos);
+                providerErrors.AddRange(stockResult.Errors);
+                successfulStockProviders = expectedStockProviders - stockResult.Errors.Count;
+            }
+
+            productStopwatch.Stop();
+
+            var warnings = BuildWarnings(productId, providerErrors);
+
+            _logger.LogInformation(
+                "Aggregated product {ProductId} in {DurationMs}ms. Price providers: {SuccessfulPriceProviders}/{ExpectedPriceProviders}, stock providers: {SuccessfulStockProviders}/{ExpectedStockProviders}, provider failures: {FailureCount}",
+                productId,
+                productStopwatch.ElapsedMilliseconds,
+                successfulPriceProviders,
+                expectedPriceProviders,
+                successfulStockProviders,
+                expectedStockProviders,
+                providerErrors.Count);
+
+            return new ProductAggregationResult(product, null, providerErrors, warnings);
+        }
+        catch (Exception ex)
+        {
+            productStopwatch.Stop();
+
+            _logger.LogError(
+                ex,
+                "Failed to aggregate product {ProductId} after {DurationMs}ms",
+                productId,
+                productStopwatch.ElapsedMilliseconds);
+
+            return new ProductAggregationResult(
+                null,
+                $"Failed to process product {productId}: {ex.Message}",
+                [],
+                []);
+        }
     }
 
-    private async Task<List<PriceInfo>> FetchPricesAsync(
+    private async Task<(List<PriceInfo> Prices, List<ProviderError> Errors)> FetchPricesAsync(
         string productId,
         CancellationToken cancellationToken)
     {
-        var tasks = _priceProviders.Select(provider => FetchPriceFromProviderAsync(provider, productId, cancellationToken));
+        var tasks = _priceProviders.Select(provider =>
+            FetchPriceFromProviderAsync(provider, productId, cancellationToken));
         var results = await Task.WhenAll(tasks);
-        return results.Where(price => price != null).Cast<PriceInfo>().ToList();
+
+        var prices = new List<PriceInfo>();
+        var errors = new List<ProviderError>();
+
+        foreach (var (price, error) in results)
+        {
+            if (price != null)
+            {
+                prices.Add(price);
+            }
+
+            if (error != null)
+            {
+                errors.Add(error);
+            }
+        }
+
+        return (prices, errors);
     }
 
-    private static async Task<PriceInfo?> FetchPriceFromProviderAsync(
+    private async Task<(PriceInfo? Price, ProviderError? Error)> FetchPriceFromProviderAsync(
         IPriceProvider provider,
         string productId,
         CancellationToken cancellationToken)
@@ -143,27 +220,68 @@ public class ProductAggregatorService : IProductAggregatorService
             var priceResponse = await provider.GetPriceAsync(productId, cancellationToken);
             if (priceResponse.Success && priceResponse.PriceInfo != null)
             {
-                return priceResponse.PriceInfo;
+                return (priceResponse.PriceInfo, null);
             }
-        }
-        catch
-        {
-            // Provider failed, continue with next
-        }
 
-        return null;
+            var message = priceResponse.ErrorMessage ?? "Price provider returned an unsuccessful response.";
+            _logger.LogWarning(
+                "Price provider {ProviderId} returned failure for product {ProductId}: {Message}",
+                provider.ProviderId,
+                productId,
+                message);
+
+            return (null, new ProviderError
+            {
+                ProductId = productId,
+                ProviderId = provider.ProviderId,
+                Message = message
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Price provider {ProviderId} threw for product {ProductId}",
+                provider.ProviderId,
+                productId);
+
+            return (null, new ProviderError
+            {
+                ProductId = productId,
+                ProviderId = provider.ProviderId,
+                Message = ex.Message
+            });
+        }
     }
 
-    private async Task<List<StockInfo>> FetchStockAsync(
+    private async Task<(List<StockInfo> StockInfos, List<ProviderError> Errors)> FetchStockAsync(
         string productId,
         CancellationToken cancellationToken)
     {
-        var tasks = _stockProviders.Select(provider => FetchStockFromProviderAsync(provider, productId, cancellationToken));
+        var tasks = _stockProviders.Select(provider =>
+            FetchStockFromProviderAsync(provider, productId, cancellationToken));
         var results = await Task.WhenAll(tasks);
-        return results.Where(stockInfos => stockInfos != null).SelectMany(stockInfos => stockInfos!).ToList();
+
+        var stockInfos = new List<StockInfo>();
+        var errors = new List<ProviderError>();
+
+        foreach (var (stock, error) in results)
+        {
+            if (stock != null)
+            {
+                stockInfos.AddRange(stock);
+            }
+
+            if (error != null)
+            {
+                errors.Add(error);
+            }
+        }
+
+        return (stockInfos, errors);
     }
 
-    private static async Task<IReadOnlyList<StockInfo>?> FetchStockFromProviderAsync(
+    private async Task<(IReadOnlyList<StockInfo>? StockInfos, ProviderError? Error)> FetchStockFromProviderAsync(
         IStockProvider provider,
         string productId,
         CancellationToken cancellationToken)
@@ -173,15 +291,50 @@ public class ProductAggregatorService : IProductAggregatorService
             var stockResponse = await provider.GetStockAsync(productId, cancellationToken);
             if (stockResponse.Success)
             {
-                return stockResponse.StockInfos;
+                return (stockResponse.StockInfos, null);
             }
+
+            var message = stockResponse.ErrorMessage ?? "Stock provider returned an unsuccessful response.";
+            _logger.LogWarning(
+                "Stock provider {ProviderId} returned failure for product {ProductId}: {Message}",
+                provider.ProviderId,
+                productId,
+                message);
+
+            return (null, new ProviderError
+            {
+                ProductId = productId,
+                ProviderId = provider.ProviderId,
+                Message = message
+            });
         }
-        catch
+        catch (Exception ex)
         {
-            // Provider failed, continue with next
+            _logger.LogWarning(
+                ex,
+                "Stock provider {ProviderId} threw for product {ProductId}",
+                provider.ProviderId,
+                productId);
+
+            return (null, new ProviderError
+            {
+                ProductId = productId,
+                ProviderId = provider.ProviderId,
+                Message = ex.Message
+            });
+        }
+    }
+
+    private static List<string> BuildWarnings(string productId, IReadOnlyList<ProviderError> providerErrors)
+    {
+        if (providerErrors.Count == 0)
+        {
+            return [];
         }
 
-        return null;
+        return providerErrors
+            .Select(error => $"Provider {error.ProviderId} failed for product {productId}: {error.Message}")
+            .ToList();
     }
 
     private static string GetCategoryFromId(string productId)
@@ -190,4 +343,10 @@ public class ProductAggregatorService : IProductAggregatorService
         var categories = new[] { "Electronics", "Clothing", "Home", "Sports", "Books", "Toys" };
         return categories[hash % categories.Length];
     }
+
+    private sealed record ProductAggregationResult(
+        Product? Product,
+        string? Error,
+        List<ProviderError> ProviderErrors,
+        List<string> Warnings);
 }

@@ -20,4 +20,6 @@ public class AggregatedProductResponse
     public int TotalSuccessful { get; set; }
     public long ProcessingTimeMs { get; set; }
     public List<string> Errors { get; set; } = new();
+    public List<ProviderError> ProviderErrors { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
 }
