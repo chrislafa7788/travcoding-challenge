@@ -21,7 +21,7 @@ Cada paso tiene un **tag de git** para checkout y reproducir benchmarks.
 | **2** | Paralelismo de productos con límite configurable (`Parallel.ForEachAsync`) | `paso2` | `9d6b0d5` |
 | **3** | Logging estructurado + errores parciales (`ProviderErrors`, `Warnings`) | `paso3` | `df56c3b` |
 | **4** | Caché en memoria por proveedor (`IMemoryCache` + decoradores) | `paso4` | `330a747` |
-| **Factory + DI** | Unificación de proveedores vía `IProviderFactory` (sin duplicar instancias) | — | _(ver rama actual)_ |
+| **Factory + DI** | Unificación de proveedores vía `IProviderFactory` (sin duplicar instancias) Mejora de mantenibilidad | — | _(ver rama actual)_ |
 | **Timeout** | Deadline configurable por proveedor (`ProviderTimeoutMs`) | — | _(ver rama actual)_ |
 | **Compare** | Endpoint `/benchmark/compare` vs baseline documentado | — | _(ver rama actual)_ |
 | **Tests** | Suite xUnit (`ProductAggregator.Core.Tests`) | — | _(ver rama actual)_ |
@@ -220,7 +220,7 @@ Benchmarks medidos con `GET /api/products/benchmark` en entorno local (Windows, 
 | Escenario | `processingTimeMs` | Notas |
 |-----------|----------------------|-------|
 | 1ª llamada (caché fría) | **699 ms** | Consulta real a los 5 proveedores |
-| 2ª llamada (caché caliente, TTL 30s) | **0 ms** | Respuestas servidas desde `IMemoryCache` |
+| 2ª llamada (caché caliente, TTL 30s) | < **5 ms** | Respuestas servidas desde `IMemoryCache` |
 | `GET /benchmark?productCount=10` en `paso4` | **700 ms** | IDs distintos → poca reutilización de caché |
 
 ### Compare endpoint — ejemplo (`productCount=10`)
