@@ -1,13 +1,18 @@
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using ProductAggregator.Core.Factories;
 using ProductAggregator.Core.Interfaces;
 using ProductAggregator.Core.Models;
 using ProductAggregator.Core.Services;
+using ProductAggregator.Core.Services.Caching;
 using ProductAggregator.Core.Services.MockProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<AggregationOptions>(
     builder.Configuration.GetSection(AggregationOptions.SectionName));
+
+builder.Services.AddMemoryCache();
 
 // Add controllers
 builder.Services.AddControllers();
@@ -19,12 +24,11 @@ builder.Services.AddEndpointsApiExplorer();
 // Provider Factory
 builder.Services.AddSingleton<IProviderFactory, ProviderFactory>();
 
-// Individual providers
-builder.Services.AddSingleton<IPriceProvider, MockPriceProviderA>();
-builder.Services.AddSingleton<IPriceProvider, MockPriceProviderB>();
-builder.Services.AddSingleton<IPriceProvider, MockPriceProviderC>();
-builder.Services.AddSingleton<IStockProvider, MockStockProviderEast>();
-builder.Services.AddSingleton<IStockProvider, MockStockProviderWest>();
+RegisterCachedPriceProvider<MockPriceProviderA>(builder.Services);
+RegisterCachedPriceProvider<MockPriceProviderB>(builder.Services);
+RegisterCachedPriceProvider<MockPriceProviderC>(builder.Services);
+RegisterCachedStockProvider<MockStockProviderEast>(builder.Services);
+RegisterCachedStockProvider<MockStockProviderWest>(builder.Services);
 
 // Product Aggregator Service
 builder.Services.AddScoped<IProductAggregatorService, ProductAggregatorService>();
@@ -52,3 +56,25 @@ app.MapGet("/", () => Results.Ok(new
 }));
 
 app.Run();
+
+static void RegisterCachedPriceProvider<TProvider>(IServiceCollection services)
+    where TProvider : class, IPriceProvider
+{
+    services.AddSingleton<TProvider>();
+    services.AddSingleton<IPriceProvider>(sp => new CachingPriceProvider(
+        sp.GetRequiredService<TProvider>(),
+        sp.GetRequiredService<IMemoryCache>(),
+        sp.GetRequiredService<IOptions<AggregationOptions>>(),
+        sp.GetRequiredService<ILogger<CachingPriceProvider>>()));
+}
+
+static void RegisterCachedStockProvider<TProvider>(IServiceCollection services)
+    where TProvider : class, IStockProvider
+{
+    services.AddSingleton<TProvider>();
+    services.AddSingleton<IStockProvider>(sp => new CachingStockProvider(
+        sp.GetRequiredService<TProvider>(),
+        sp.GetRequiredService<IMemoryCache>(),
+        sp.GetRequiredService<IOptions<AggregationOptions>>(),
+        sp.GetRequiredService<ILogger<CachingStockProvider>>()));
+}

@@ -200,7 +200,7 @@ El token viaja desde el controller hasta cada `GetPriceAsync` / `GetStockAsync`,
 
 ```bash
 # Original (código sin optimizar)
-git checkout ba0803b
+git switch --detach ba0803b
 cd src/ProductAggregator.Api && dotnet run
 
 # Parte 1
